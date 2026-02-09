@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YgzOS Shell</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap');
+
+        :root {
+            --bg-color: #0a0a0a;
+            --term-green: #00ff41;
+            --term-blue: #00bfff;
+            --term-red: #ff3333;
+            --term-yellow: #ffff00;
+            --term-glow: 0 0 10px rgba(0, 255, 65, 0.5);
+            --font-stack: 'Fira Code', 'Courier New', monospace;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--term-green);
+            font-family: var(--font-stack);
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            font-size: 16px;
+            animation: crt-on 0.8s ease-out;
+        }
+
+        @keyframes crt-on {
+            0% { transform: scaleY(0.01) scaleX(0.5); filter: brightness(10); opacity: 0.5; }
+            20% { transform: scaleY(0.01) scaleX(1); filter: brightness(5); }
+            40% { transform: scaleY(1) scaleX(1); filter: brightness(2); opacity: 1; }
+            100% { transform: scaleY(1) scaleX(1); filter: brightness(1); }
+        }
+
+        #matrix-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            z-index: 0;
+            opacity: 0.15;
+        }
+
+        .scanlines {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 999;
+        }
+
+        #terminal {
+            position: relative;
+            z-index: 10;
+            height: 100%;
+            padding: 20px;
+            overflow-y: auto;
+            box-sizing: border-box;
+            text-shadow: var(--term-glow);
+        }
+
+        #terminal::-webkit-scrollbar { width: 8px; background: #111; }
+        #terminal::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        #terminal::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        .line {
+            white-space: pre-wrap;
+            margin-bottom: 4px;
+            line-height: 1.5;
+            word-break: break-word;
+        }
+        
+        .cmd { color: #fff; font-weight: bold; }
+        .path { color: var(--term-blue); }
+        .dir { color: var(--term-blue); font-weight: bold; }
+        .file { color: #ccc; }
+        .error { color: var(--term-red); }
+        .success { color: var(--term-green); font-weight: bold; }
+        .warning { color: var(--term-yellow); }
+        .dim { color: #666; }
+
+        .input-line {
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+        #hidden-input {
+            position: absolute; opacity: 0; top: -1000px;
+        }
+        .cursor {
+            display: inline-block; width: 10px; height: 18px;
+            background: var(--term-green);
+            animation: blink 1s step-end infinite;
+            vertical-align: text-bottom;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        #game-layer {
+            display: none;
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            border: 2px solid var(--term-green);
+            background: rgba(0,0,0,0.95);
+            z-index: 1000;
+            box-shadow: 0 0 30px var(--term-green), inset 0 0 30px rgba(0, 255, 65, 0.1);
+        }
+
+        #game-score {
+            display: none;
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, calc(-50% - 220px));
+            color: var(--term-green);
+            font-family: var(--font-stack);
+            font-size: 18px;
+            z-index: 1001;
+            text-shadow: var(--term-glow);
+        }
+
+        @keyframes glitch-skew {
+            0% { transform: skew(0deg); }
+            20% { transform: skew(-2deg); filter: hue-rotate(90deg); }
+            40% { transform: skew(1deg); }
+            60% { transform: skew(-1deg); filter: hue-rotate(-90deg); }
+            80% { transform: skew(0.5deg); }
+            100% { transform: skew(0deg); }
+        }
+        .glitch-active {
+            animation: glitch-skew 0.5s ease-in-out;
+        }
+
+        .progress-bar {
+            display: inline-block;
+            width: 200px;
+            height: 12px;
+            border: 1px solid var(--term-green);
+            position: relative;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--term-green);
+            transition: width 0.15s linear;
+            box-shadow: var(--term-glow);
+        }
+
+        @media (max-width: 600px) {
+            body { font-size: 13px; }
+            #terminal { padding: 10px; }
+            #game-layer { width: 300px !important; height: 300px !important; }
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="scanlines"></div>
+    <canvas id="matrix-canvas"></canvas>
+    <canvas id="game-layer" width="400" height="400"></canvas>
+    <div id="game-score">SCORE: 0 | ESC to quit</div>
+
+    <div id="terminal" onclick="focusInput()">
+        <div id="output"></div>
+        <div class="input-line" id="input-line" style="display:none">
+            <span id="prompt">visitor@system:<span class="path">~</span>$ </span>
+            <span id="visible-input"></span><span class="cursor"></span>
+        </div>
+    </div>
+
+    <input type="text" id="hidden-input" autocomplete="off" spellcheck="false">
+
+    <script>
+        const sys = {
+            user: "visitor",
+            host: "system",
+            path: "~",
+            isRoot: false,
+            history: [],
+            historyIndex: -1,
+            startTime: Date.now(),
+            fileSystem: {
+                "~": {
+                    "_type": "dir",
+                    "projeler yakında": {
+                        "_type": "dir",
+                    },
+                    "hakkimda.txt": { "_type": "file", "content": "NAME: Yağız Yaltı\nROLE: Software Developer\nSKILLS: C#, ASP.NET Core, ReactJS, NestJS,\nLOCATION: Turkey" },
+                    "iletisim.txt": { "_type": "file", "content": "EMAIL: mail@domain.me\nGITHUB: github.com/user\nLINKEDIN: linkedin.com/in/user" },
+                    "sifreler.txt": { "_type": "file", "content": "[ERROR] ACCESS DENIED.\n[ERROR] FILE IS AES-256 ENCRYPTED.\n[ERROR] AUTHORIZATION LEVEL: ROOT REQUIRED." },
+                    ".secret": { "_type": "file", "content": ">> There is no spoon.\n>> Follow the white rabbit.\n>> Wake up, Neo..." }
+                }
+            }
+        };
+
+        let currentDir = sys.fileSystem["~"];
+        let dirStack = [];
+
+        const output = document.getElementById('output');
+        const inputLine = document.getElementById('input-line');
+        const hiddenInput = document.getElementById('hidden-input');
+        const visibleInput = document.getElementById('visible-input');
+        const promptSpan = document.getElementById('prompt');
+        const terminalDiv = document.getElementById('terminal');
+
+        function escapeHTML(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function getUptime() {
+            const ms = Date.now() - sys.startTime;
+            const s = Math.floor(ms / 1000);
+            const m = Math.floor(s / 60);
+            const h = Math.floor(m / 60);
+            if (h > 0) return h + 'h ' + (m % 60) + 'm ' + (s % 60) + 's';
+            if (m > 0) return m + 'm ' + (s % 60) + 's';
+            return s + 's';
+        }
+
+        let audioCtx = null;
+        function ensureAudio() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+        function playSound(type) {
+            ensureAudio();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+            
+            if (type === 'key') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(800, now);
+                gain.gain.setValueAtTime(0.05, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+                osc.start(now);
+                osc.stop(now + 0.05);
+            } else if (type === 'error') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(150, now);
+                osc.frequency.linearRampToValueAtTime(100, now + 0.1);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.linearRampToValueAtTime(0.001, now + 0.2);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            } else if (type === 'success') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, now);
+                osc.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+                gain.gain.setValueAtTime(0.05, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                osc.start(now);
+                osc.stop(now + 0.1);
+            }
+        }
+
+        function print(text, className = "line", speed = 0) {
+            const div = document.createElement('div');
+            div.className = className;
+            
+            if (speed === 0) {
+                div.innerHTML = text;
+                output.appendChild(div);
+                scrollToBottom();
+            } else {
+                output.appendChild(div);
+                let i = 0;
+
+                div.innerHTML = text; 
+                scrollToBottom();
+            }
+        }
+
+        function scrollToBottom() {
+            terminalDiv.scrollTop = terminalDiv.scrollHeight;
+        }
+
+        async function boot() {
+const logo = [
+    '  \u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593',
+    '  \u2593                                                    \u2593',
+    '  \u2593  \u2588\u2588\u2557   \u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2588\u2557        \u2593',
+    '  \u2593  \u255a\u2588\u2588\u2557 \u2588\u2588\u2554\u255d\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2588\u2588\u2554\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d       \u2593',
+    '  \u2593   \u255a\u2588\u2588\u2588\u2588\u2554\u255d \u2588\u2588\u2551  \u2588\u2588\u2588\u2557   \u2588\u2588\u2554\u255d  \u2588\u2588\u2551  \u2588\u2588\u2551\u255a\u2588\u2588\u2588\u2588\u2588\u2557        \u2593',
+    '  \u2593    \u255a\u2588\u2588\u2554\u255d  \u2588\u2588\u2551   \u2588\u2588\u2551  \u2588\u2588\u2554\u255d   \u2588\u2588\u2551  \u2588\u2588\u2551 \u255a\u2550\u2550\u2550\u2588\u2588\u2557       \u2593',
+    '  \u2593     \u2588\u2588\u2551   \u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d      \u2593',
+    '  \u2593     \u255a\u2550\u255d    \u255a\u2550\u2550\u2550\u2550\u2550\u255d  \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u255d       \u2593',
+    '  \u2593               \u250c\u2500 S H E L L \u2500\u2510                      \u2593',
+    '  \u2593               \u2502  v3.0.0   \u2502                        \u2593',
+    '  \u2593               \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518                        \u2593',
+    '  \u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593\u2593',
+];
+
+            const phases = [
+                {
+                    items: [
+                        { text: "BIOS DATE 09/02/2026 18:22:15 VER 2.04", delay: 70 },
+                    ]
+                },
+                {
+                    items: [
+                        { text: "NET: SECURE TUNNEL [TLS 1.3].. ESTABLISHED", delay: 80 },
+                        { text: "DNS: RESOLVING NODES.......... OK", delay: 60 },
+                    ]
+                },
+                {
+                    items: [
+                        { text: "KERNEL: LOADING MODULES....... OK", delay: 80 },
+                        { text: "FS: MOUNTING /dev/sda1........ OK", delay: 70 },
+                        { text: "SHELL: JS-ZSH 5.9............ READY", delay: 50 },
+                    ]
+                }
+            ];
+
+            const logoContainer = document.createElement('div');
+            logoContainer.style.whiteSpace = 'pre';
+            logoContainer.style.fontWeight = 'bold';
+            logoContainer.style.lineHeight = '1.3';
+            output.appendChild(logoContainer);
+
+            for (let line of logo) {
+                const lineDiv = document.createElement('div');
+                lineDiv.style.color = 'var(--term-green)';
+                lineDiv.style.textShadow = '0 0 8px rgba(0,255,65,0.6)';
+                lineDiv.textContent = line;
+                lineDiv.style.opacity = '0';
+                lineDiv.style.transform = 'translateX(-10px)';
+                lineDiv.style.transition = 'opacity 0.2s, transform 0.2s';
+                logoContainer.appendChild(lineDiv);
+                scrollToBottom();
+                await new Promise(r => setTimeout(r, 40));
+                lineDiv.style.opacity = '1';
+                lineDiv.style.transform = 'translateX(0)';
+                playSound('key');
+            }
+
+            await new Promise(r => setTimeout(r, 400));
+
+            for (let phase of phases) {
+                print("");
+                print(``);
+                await new Promise(r => setTimeout(r, 100));
+
+                for (let item of phase.items) {
+                    print(`  <span class="success">[\u2713]</span> ${item.text}`);
+                    playSound('key');
+                    await new Promise(r => setTimeout(r, item.delay));
+                }
+            }
+
+            await new Promise(r => setTimeout(r, 200));
+
+            playSound('success');
+            await new Promise(r => setTimeout(r, 400));
+
+            print("");
+            print("\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510", "dim");
+            print("\u2502  <span class='success'>\u2588</span> YgzOS Shell v3.0.0 \u2014 System Online          \u2502", "dim");
+            print("\u2502  <span class='success'>\u2588</span> Logged in as: <span class='success'>" + sys.user + "</span>                       \u2502", "dim");
+            print("\u2502  <span class='success'>\u2588</span> Type '<span class='success'>help</span>' to see available commands.    \u2502", "dim");
+            print("\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518", "dim");
+            print("");
+            inputLine.style.display = "flex";
+            hiddenInput.focus();
+            startMatrix();
+        }
+
+        function handleCommand(raw) {
+            const args = raw.trim().split(/\s+/);
+            const cmd = args[0].toLowerCase();
+            const param = args[1];
+
+            print(`<span class="success">${sys.user}@${sys.host}</span>:<span class="path">${sys.path}</span>$ ${escapeHTML(raw)}`);
+
+            switch(cmd) {
+                case 'help':
+                case '?':
+                    print(`
+<span class="success">help</span>            Show this help message
+<span class="success">ls</span>              List directory contents
+<span class="success">cd [dir]</span>        Change directory (cd ~, cd ..)
+<span class="success">cat [file]</span>      Display file content
+<span class="success">pwd</span>             Print working directory
+<span class="success">whoami</span>          Display current user
+<span class="success">echo [text]</span>     Print text to terminal
+<span class="success">tree</span>            Show directory tree
+<span class="success">history</span>         Show command history
+<span class="success">uname</span>           System information (short)
+<span class="success">neofetch</span>        System information (rich)
+<span class="success">date</span>            Show current date/time
+<span class="success">clear</span>           Clear terminal screen
+<span class="success">snake</span>           Play Snake game
+<span class="success">sudo su</span>         Switch to root user
+<span class="success">exit</span>            Logout / exit root
+                    `);
+                    break;
+
+                case 'ls':
+                    let contents = [];
+                    const showHidden = param === '-a' || param === '-la' || param === '-al';
+                    for (let key in currentDir) {
+                        if (key === "_type") continue;
+                        if (!showHidden && key.startsWith('.')) continue;
+                        if (currentDir[key]._type === "dir") {
+                            contents.push(`<span class="dir">${key}/</span>`);
+                        } else {
+                            contents.push(`<span class="file">${key}</span>`);
+                        }
+                    }
+                    print(contents.join('    ') || "(empty)");
+                    break;
+
+                case 'cd':
+                    if (!param || param === "~") {
+                        dirStack = [];
+                        currentDir = sys.fileSystem["~"];
+                        sys.path = "~";
+                    } else if (param === "..") {
+                        if (dirStack.length > 0) {
+                            dirStack.pop();
+                            currentDir = sys.fileSystem["~"];
+                            sys.path = "~";
+                            for (let p of dirStack) {
+                                currentDir = currentDir[p];
+                                sys.path += "/" + p;
+                            }
+                        }
+                    } else if (currentDir[param] && currentDir[param]._type === "dir") {
+                        dirStack.push(param);
+                        currentDir = currentDir[param];
+                        sys.path += "/" + param;
+                    } else {
+                        print(`cd: ${escapeHTML(param)}: No such directory`, "error");
+                        playSound('error');
+                    }
+                    break;
+
+                case 'cat':
+                    if (!param) { print("Usage: cat [filename]"); break; }
+                    if (currentDir[param] && currentDir[param]._type === "file") {
+                        print(currentDir[param].content);
+                    } else {
+                        print(`cat: ${escapeHTML(param)}: No such file`, "error");
+                        playSound('error');
+                    }
+                    break;
+
+                case 'clear':
+                    output.innerHTML = "";
+                    break;
+
+                case 'neofetch':
+                    const art = `    /\\_/\\  
+   ( o.o ) 
+    > ^ <  
+   /|   |\\
+  (_|   |_)`;
+                    const info = `<span class="success">${sys.user}@${sys.host}</span>
+<span class="dim">──────────────────</span>
+<span class="success">OS:</span>      WebOS Kernel 3.0
+<span class="success">Host:</span>    ${sys.host}
+<span class="success">Kernel:</span>  JS-CORE 2026.02
+<span class="success">Uptime:</span>  ${getUptime()}
+<span class="success">Shell:</span>   JS-ZSH 5.9
+<span class="success">CPU:</span>     Quantum Core i9
+<span class="success">Memory:</span>  ${(performance.memory ? Math.round(performance.memory.usedJSHeapSize/1048576) : 42)} MiB / 64 MiB`;
+                    print(`<div style="display:flex;align-items:center;gap:24px"><div style="white-space:pre;color:var(--term-green);line-height:1.4">${art}</div><div style="white-space:pre;line-height:1.6">${info}</div></div>`);
+                    break;
+
+                case 'sudo':
+                    if (param === "su") {
+                        if (sys.isRoot) {
+                            print("Already running as root.", "warning");
+                            break;
+                        }
+                        print("Password required for root: ********", "error");
+                        print("Authenticating...", "dim");
+                        document.body.classList.add('glitch-active');
+                        setTimeout(() => document.body.classList.remove('glitch-active'), 500);
+                        sys.isRoot = true;
+                        sys.user = "root";
+                        document.documentElement.style.setProperty('--term-green', '#ff3333');
+                        document.documentElement.style.setProperty('--term-glow', '0 0 10px rgba(255, 51, 51, 0.5)');
+                        print("");
+                        print("╔══════════════════════════════════╗", "error");
+                        print("║     ROOT ACCESS GRANTED          ║", "error");
+                        print("║     All restrictions lifted.     ║", "error");
+                        print("╚══════════════════════════════════╝", "error");
+                        playSound('success');
+                    } else {
+                        print("Usage: sudo su", "error");
+                    }
+                    break;
+
+                case 'snake':
+                    startSnake();
+                    break;
+
+                case 'date':
+                    print(new Date().toLocaleString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' }));
+                    break;
+
+                case 'whoami':
+                    print(sys.user);
+                    break;
+
+                case 'pwd':
+                    print(sys.path.replace('~', '/home/' + (sys.isRoot ? 'root' : 'visitor')));
+                    break;
+
+                case 'echo':
+                    print(escapeHTML(args.slice(1).join(' ')));
+                    break;
+
+                case 'history':
+                    if (sys.history.length === 0) {
+                        print("No commands in history.");
+                    } else {
+                        sys.history.forEach((h, i) => {
+                            print(`  <span class="dim">${String(i + 1).padStart(3)}</span>  ${escapeHTML(h)}`);
+                        });
+                    }
+                    break;
+
+                case 'uname':
+                    if (param === '-a') {
+                        print("WebOS quantum-system 3.0.0-2026-generic #1 SMP PREEMPT JS-CORE x86_64 GNU/WebOS");
+                    } else {
+                        print("WebOS");
+                    }
+                    break;
+
+                case 'tree':
+                    function printTree(dir, prefix) {
+                        let result = '';
+                        const keys = Object.keys(dir).filter(k => k !== "_type" && !k.startsWith('.'));
+                        keys.forEach((key, idx) => {
+                            const last = idx === keys.length - 1;
+                            const connector = last ? '\u2514\u2500\u2500 ' : '\u251c\u2500\u2500 ';
+                            if (dir[key]._type === "dir") {
+                                result += prefix + connector + '<span class="dir">' + key + '/</span>\n';
+                                result += printTree(dir[key], prefix + (last ? '    ' : '\u2502   '));
+                            } else {
+                                result += prefix + connector + '<span class="file">' + key + '</span>\n';
+                            }
+                        });
+                        return result;
+                    }
+                    print('<span class="dir">.</span>');
+                    print(printTree(currentDir, ''));
+                    break;
+
+                case 'rm':
+                    if (!param) { print("Usage: rm [file]", "error"); break; }
+                    if (param === '-rf' && args[2] === '/') {
+                        print("Nice try. Permission denied.", "error");
+                        playSound('error');
+                    } else {
+                        print(`rm: cannot remove '${escapeHTML(param)}': Operation not permitted`, "error");
+                        playSound('error');
+                    }
+                    break;
+
+                case 'exit':
+                case 'logout':
+                    if (sys.isRoot) {
+                        sys.isRoot = false;
+                        sys.user = "visitor";
+                        document.documentElement.style.setProperty('--term-green', '#00ff41');
+                        document.documentElement.style.setProperty('--term-glow', '0 0 10px rgba(0, 255, 65, 0.5)');
+                        print("Returning to user mode.", "success");
+                        playSound('success');
+                    } else {
+                        print("logout: not a login shell", "dim");
+                    }
+                    break;
+
+                case 'hack':
+                    print("<span class='error'>INITIATING HACK SEQUENCE...</span>");
+                    print("<span class='warning'>Bypassing firewall.......... DONE</span>");
+                    print("<span class='warning'>Accessing mainframe......... DONE</span>");
+                    print("<span class='warning'>Downloading data............ DONE</span>");
+                    print("<span class='error'>Just kidding. You don't have enough clearance.</span>");
+                    playSound('success');
+                    break;
+
+                case 'matrix':
+                    const mc = document.getElementById('matrix-canvas');
+                    if (mc.style.opacity === '0') {
+                        mc.style.opacity = '0.15';
+                        print("Matrix rain: ON", "success");
+                    } else {
+                        mc.style.opacity = '0';
+                        print("Matrix rain: OFF", "dim");
+                    }
+                    break;
+
+                case '':
+                    break;
+
+                default:
+                    print(`Command not found: ${escapeHTML(cmd)}. Type 'help'.`, "error");
+                    playSound('error');
+            }
+            updatePrompt();
+        }
+
+        function updatePrompt() {
+            promptSpan.innerHTML = `${sys.user}@${sys.host}:<span class="path">${sys.path}</span>$ `;
+        }
+
+        hiddenInput.addEventListener('input', () => {
+            visibleInput.textContent = hiddenInput.value;
+            playSound('key');
+        });
+
+        hiddenInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const val = hiddenInput.value;
+                if (val.trim()) {
+                    sys.history.push(val);
+                    sys.historyIndex = sys.history.length;
+                    handleCommand(val);
+                } else {
+                    handleCommand('');
+                }
+                hiddenInput.value = "";
+                visibleInput.textContent = "";
+            }
+            else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (sys.historyIndex > 0) {
+                    sys.historyIndex--;
+                    hiddenInput.value = sys.history[sys.historyIndex];
+                    visibleInput.textContent = hiddenInput.value;
+                }
+            }
+            else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (sys.historyIndex < sys.history.length - 1) {
+                    sys.historyIndex++;
+                    hiddenInput.value = sys.history[sys.historyIndex];
+                    visibleInput.textContent = hiddenInput.value;
+                } else {
+                    sys.historyIndex = sys.history.length;
+                    hiddenInput.value = "";
+                    visibleInput.textContent = "";
+                }
+            }
+            else if (e.key === 'Tab') {
+                e.preventDefault();
+                const currentVal = hiddenInput.value;
+                const parts = currentVal.split(' ');
+                const lastArg = parts[parts.length - 1];
+                
+                const keys = Object.keys(currentDir).filter(k => k !== "_type");
+                const match = keys.find(k => k.startsWith(lastArg));
+                
+                if (match) {
+                    parts[parts.length - 1] = match;
+                    hiddenInput.value = parts.join(' ');
+                    visibleInput.textContent = hiddenInput.value;
+                    playSound('key');
+                }
+            }
+        });
+
+        function focusInput() {
+            hiddenInput.focus();
+        }
+
+        function startMatrix() {
+            const canvas = document.getElementById('matrix-canvas');
+            const ctx = canvas.getContext('2d');
+
+            const chars = "01\u30a2\u30a4\u30a6\u30a8\u30aa\u30ab\u30ad\u30af\u30b1\u30b3\u30b5\u30b7\u30b9\u30bb\u30bd";
+            const fontSize = 14;
+            let columns, drops;
+
+            function resize() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                columns = Math.floor(canvas.width / fontSize);
+                drops = Array(columns).fill(1);
+            }
+            resize();
+            window.addEventListener('resize', resize);
+
+            function draw() {
+                ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = sys.isRoot ? "#ff3333" : "#00ff41";
+                ctx.font = fontSize + "px monospace";
+
+                for (let i = 0; i < drops.length; i++) {
+                    const text = chars.charAt(Math.floor(Math.random() * chars.length));
+                    ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+                    if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+                    drops[i]++;
+                }
+            }
+            setInterval(draw, 50);
+        }
+
+        let snakeInterval;
+        function startSnake() {
+            const canvas = document.getElementById('game-layer');
+            const ctx = canvas.getContext('2d');
+            const scoreDisplay = document.getElementById('game-score');
+            canvas.style.display = "block";
+            scoreDisplay.style.display = "block";
+            inputLine.style.display = "none";
+            
+            let snake = [{x: 10, y: 10}];
+            let food = {x: 15, y: 15};
+            let dx = 0, dy = 0;
+            let score = 0;
+            let gameOver = false;
+
+            scoreDisplay.textContent = 'SCORE: 0 | Arrows to move | ESC to quit';
+
+            function spawnFood() {
+                let pos;
+                do {
+                    pos = {x: Math.floor(Math.random()*20), y: Math.floor(Math.random()*20)};
+                } while (snake.some(s => s.x === pos.x && s.y === pos.y));
+                return pos;
+            }
+
+            function gameLoop() {
+                if (gameOver) return;
+                if (dx === 0 && dy === 0) return;
+
+                const head = {x: snake[0].x + dx, y: snake[0].y + dy};
+
+                if (head.x < 0 || head.x >= 20 || head.y < 0 || head.y >= 20) {
+                    endGame(); return;
+                }
+
+                if (snake.some(s => s.x === head.x && s.y === head.y)) {
+                    endGame(); return;
+                }
+
+                snake.unshift(head);
+
+                if (head.x === food.x && head.y === food.y) {
+                    score++;
+                    scoreDisplay.textContent = 'SCORE: ' + score + ' | ESC to quit';
+                    food = spawnFood();
+                    playSound('success');
+                } else {
+                    snake.pop();
+                }
+
+                ctx.fillStyle = "#0a0a0a";
+                ctx.fillRect(0, 0, 400, 400);
+
+                ctx.strokeStyle = "#111";
+                for (let i = 0; i < 20; i++) {
+                    ctx.beginPath(); ctx.moveTo(i*20, 0); ctx.lineTo(i*20, 400); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, i*20); ctx.lineTo(400, i*20); ctx.stroke();
+                }
+
+                const snakeColor = sys.isRoot ? "#ff3333" : "#00ff41";
+                for (let i = 1; i < snake.length; i++) {
+                    ctx.fillStyle = snakeColor;
+                    ctx.globalAlpha = 1 - (i / snake.length) * 0.4;
+                    ctx.fillRect(snake[i].x*20+1, snake[i].y*20+1, 18, 18);
+                }
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = "#fff";
+                ctx.fillRect(snake[0].x*20+1, snake[0].y*20+1, 18, 18);
+                
+                ctx.fillStyle = sys.isRoot ? "#ffaa00" : "#fff";
+                ctx.shadowColor = sys.isRoot ? "#ffaa00" : "#fff";
+                ctx.shadowBlur = 10;
+                ctx.fillRect(food.x*20+2, food.y*20+2, 16, 16);
+                ctx.shadowBlur = 0;
+            }
+
+            function changeDir(e) {
+                if(e.key === 'ArrowUp' && dy !== 1) { dx=0; dy=-1; e.preventDefault(); }
+                if(e.key === 'ArrowDown' && dy !== -1) { dx=0; dy=1; e.preventDefault(); }
+                if(e.key === 'ArrowLeft' && dx !== 1) { dx=-1; dy=0; e.preventDefault(); }
+                if(e.key === 'ArrowRight' && dx !== -1) { dx=1; dy=0; e.preventDefault(); }
+                if(e.key === 'Escape') endGame();
+            }
+            document.addEventListener('keydown', changeDir);
+
+            snakeInterval = setInterval(gameLoop, 100);
+
+            function endGame() {
+                if (gameOver) return;
+                gameOver = true;
+                clearInterval(snakeInterval);
+                document.removeEventListener('keydown', changeDir);
+                canvas.style.display = "none";
+                scoreDisplay.style.display = "none";
+                inputLine.style.display = "flex";
+                print(`<span class="error">\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557</span>`);
+                print(`<span class="error">\u2551  GAME OVER! Score: ${String(score).padStart(3)}       \u2551</span>`);
+                print(`<span class="error">\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d</span>`);
+                hiddenInput.focus();
+            }
+        }
+
+        window.onload = boot;
+    </script>
+</body>
+</html>
